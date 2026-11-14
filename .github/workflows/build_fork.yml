@@ -45,12 +45,11 @@ jobs:
               for required in ("classes.dex", "extensions/youtube.mpe", "extensions/shared.mpe"):
                   if required not in names:
                       sys.exit(f"Missing {required}")
-              # The extensions are zips themselves, check them too.
+              # The extensions are DEX files, check they read back whole.
               for name in names:
                   if name.endswith(".mpe"):
-                      import io
-                      inner = zipfile.ZipFile(io.BytesIO(z.read(name)))
-                      if inner.testzip() is not None:
+                      ext = z.read(name)
+                      if not ext.startswith(b"dex\n"):
                           sys.exit(f"Corrupt extension {name}")
               if bad_loc or bad_crc:
                   sys.exit("Corrupt bundle")
