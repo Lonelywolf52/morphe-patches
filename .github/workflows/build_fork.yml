@@ -1,0 +1,64 @@
+name: Build fork bundle
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      # One clean Gradle run: no build cache, no parallel tasks, nothing else touching the bundle.
+      - name: Build Android bundle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew clean :patches:buildAndroid --no-daemon --no-build-cache --no-parallel
+
+      - name: Verify bundle
+        run: |
+          ls -l patches/build/libs
+          python3 - <<'EOF'
+          import glob, sys, zipfile
+          files = glob.glob("patches/build/libs/patches-*.mpp")
+          if not files:
+              sys.exit("No .mpp built")
+          for path in files:
+              data = open(path, "rb").read()
+              z = zipfile.ZipFile(path)
+              bad_loc = [i.filename for i in z.infolist()
+                         if data[i.header_offset:i.header_offset + 4] != b"PK\x03\x04"]
+              bad_crc = z.testzip()
+              names = z.namelist()
+              print(path, "entries:", len(names), "bad LOC:", len(bad_loc), "first bad CRC:", bad_crc)
+              for required in ("classes.dex", "extensions/youtube.mpe", "extensions/shared.mpe"):
+                  if required not in names:
+                      sys.exit(f"Missing {required}")
+              # The extensions are zips themselves, check them too.
+              for name in names:
+                  if name.endswith(".mpe"):
+                      import io
+                      inner = zipfile.ZipFile(io.BytesIO(z.read(name)))
+                      if inner.testzip() is not None:
+                          sys.exit(f"Corrupt extension {name}")
+              if bad_loc or bad_crc:
+                  sys.exit("Corrupt bundle")
+          print("Bundle OK")
+          EOF
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          archive: false
+          path: patches/build/libs/patches-*.mpp
