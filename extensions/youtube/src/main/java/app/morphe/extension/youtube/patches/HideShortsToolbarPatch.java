@@ -17,6 +17,7 @@ import androidx.annotation.Nullable;
 import java.lang.ref.WeakReference;
 
 import app.morphe.extension.shared.Logger;
+import app.morphe.extension.shared.Utils;
 import app.morphe.extension.youtube.settings.Settings;
 import app.morphe.extension.youtube.shared.ShortsPlayerState;
 
@@ -55,6 +56,7 @@ public final class HideShortsToolbarPatch {
      * and receives no touches.
      */
     public static void hideShortsToolbar(@Nullable View toolbar) {
+        Logger.printDebug(() -> "ShortsToolbar: hook called, enabled: " + HIDE_SHORTS_TOOLBAR + ", view: " + toolbar);
         if (!HIDE_SHORTS_TOOLBAR || toolbar == null) {
             return;
         }
@@ -78,10 +80,6 @@ public final class HideShortsToolbarPatch {
      * Called when the main activity is created.
      */
     public static void initialize(Activity activity) {
-        if (!HIDE_SHORTS_STATUS_BAR) {
-            return;
-        }
-
         try {
             activityRef = new WeakReference<>(activity);
 
@@ -89,6 +87,20 @@ public final class HideShortsToolbarPatch {
                 return;
             }
             initialized = true;
+
+            // Diagnostics: logs the views at the top of the screen when Shorts open,
+            // to find the top bar on app versions where the hook does not reach it.
+            if (Logger.isDebugEnabled()) {
+                ShortsPlayerState.getOnChange().addObserver((Boolean isOpen) -> {
+                    if (isOpen) {
+                        Utils.runOnMainThreadDelayed(HideShortsToolbarPatch::logTopViews, 2000);
+                    }
+                });
+            }
+
+            if (!HIDE_SHORTS_STATUS_BAR) {
+                return;
+            }
 
             ShortsPlayerState.getOnChange().addObserver((Boolean isOpen) -> updateStatusBar());
 
@@ -115,6 +127,59 @@ public final class HideShortsToolbarPatch {
             });
         } catch (Exception ex) {
             Logger.printException(() -> "initialize failure", ex);
+        }
+    }
+
+    private static void logTopViews() {
+        try {
+            Activity activity = activityRef.get();
+            if (activity == null) return;
+            View decorView = activity.getWindow().getDecorView();
+            final int limit = decorView.getHeight() / 6;
+            StringBuilder sb = new StringBuilder("ShortsToolbar: views at top of screen (limit " + limit + "px):\n");
+            logTopViews(decorView, limit, 0, sb);
+            String text = sb.toString();
+            // Logcat lines are limited in length.
+            for (int i = 0; i < text.length(); i += 3000) {
+                String part = text.substring(i, Math.min(text.length(), i + 3000));
+                Logger.printDebug(() -> part);
+            }
+        } catch (Exception ex) {
+            Logger.printException(() -> "logTopViews failure", ex);
+        }
+    }
+
+    private static void logTopViews(View view, int limit, int depth, StringBuilder sb) {
+        if (view.getVisibility() != View.VISIBLE || view.getWidth() == 0 || view.getHeight() == 0) {
+            return;
+        }
+        int[] location = new int[2];
+        view.getLocationOnScreen(location);
+        if (location[1] > limit) {
+            return;
+        }
+
+        String idName = "no_id";
+        if (view.getId() != View.NO_ID) {
+            try {
+                idName = view.getResources().getResourceEntryName(view.getId());
+            } catch (Exception ignored) {
+                idName = "0x" + Integer.toHexString(view.getId());
+            }
+        }
+        CharSequence description = view.getContentDescription();
+        sb.append(depth).append(' ')
+                .append(view.getClass().getName()).append(' ')
+                .append(idName).append(' ')
+                .append(location[0]).append(',').append(location[1]).append(' ')
+                .append(view.getWidth()).append('x').append(view.getHeight());
+        if (description != null) sb.append(" desc=").append(description);
+        sb.append('\n');
+
+        if (view instanceof ViewGroup group) {
+            for (int i = 0, count = group.getChildCount(); i < count; i++) {
+                logTopViews(group.getChildAt(i), limit, depth + 1, sb);
+            }
         }
     }
 
