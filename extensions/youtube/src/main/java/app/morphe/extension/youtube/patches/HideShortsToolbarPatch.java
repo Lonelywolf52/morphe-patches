@@ -17,6 +17,7 @@ import androidx.annotation.Nullable;
 import java.lang.ref.WeakReference;
 
 import app.morphe.extension.shared.Logger;
+import app.morphe.extension.shared.ResourceUtils;
 import app.morphe.extension.shared.Utils;
 import app.morphe.extension.youtube.settings.Settings;
 import app.morphe.extension.youtube.shared.ShortsPlayerState;
@@ -98,17 +99,17 @@ public final class HideShortsToolbarPatch {
                 });
             }
 
-            if (!HIDE_SHORTS_STATUS_BAR) {
+            if (!HIDE_SHORTS_STATUS_BAR && !HIDE_SHORTS_TOOLBAR) {
                 return;
             }
 
-            ShortsPlayerState.getOnChange().addObserver((Boolean isOpen) -> updateStatusBar());
+            ShortsPlayerState.getOnChange().addObserver((Boolean isOpen) -> updateShortsUi());
 
             activity.getApplication().registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
                 @Override
                 public void onActivityResumed(@NonNull Activity a) {
                     if (a == activityRef.get()) {
-                        updateStatusBar();
+                        updateShortsUi();
                     }
                 }
 
@@ -183,7 +184,37 @@ public final class HideShortsToolbarPatch {
         }
     }
 
-    private static void updateStatusBar() {
+    /**
+     * The main app toolbar (back button, messages, search and menu) is shown on top of the
+     * Shorts player. It is the same toolbar used on every other screen, so it is only hidden
+     * while Shorts are open and restored afterwards.
+     */
+    @Nullable
+    private static View findAppToolbar(View decorView) {
+        final int id = ResourceUtils.getIdIdentifier("appbar_layout");
+        return id == 0 ? null : decorView.findViewById(id);
+    }
+
+    /**
+     * If the app toolbar was hidden by this patch, and must be restored when Shorts close.
+     */
+    private static boolean toolbarHidden;
+
+    private static void applyShortsUi(Window window, View decorView) {
+        if (HIDE_SHORTS_STATUS_BAR && isStatusBarVisible(decorView)) {
+            setStatusBarHidden(window, decorView, true);
+        }
+
+        if (HIDE_SHORTS_TOOLBAR) {
+            View toolbar = findAppToolbar(decorView);
+            if (toolbar != null && toolbar.getVisibility() != View.GONE) {
+                toolbar.setVisibility(View.GONE);
+                toolbarHidden = true;
+            }
+        }
+    }
+
+    private static void updateShortsUi() {
         try {
             Activity activity = activityRef.get();
             if (activity == null) {
@@ -194,15 +225,17 @@ public final class HideShortsToolbarPatch {
             View decorView = window.getDecorView();
             final boolean shortsOpen = ShortsPlayerState.isOpen();
 
-            Logger.printDebug(() -> "Shorts open: " + shortsOpen + ", hiding status bar: " + shortsOpen);
+            Logger.printDebug(() -> "Shorts open: " + shortsOpen);
 
             if (shortsOpen) {
-                setStatusBarHidden(window, decorView, true);
+                applyShortsUi(window, decorView);
 
                 if (layoutListener == null) {
+                    // The app shows the status bar and toolbar again after dialogs,
+                    // the keyboard, and returning to the app.
                     layoutListener = () -> {
-                        if (ShortsPlayerState.isOpen() && isStatusBarVisible(decorView)) {
-                            setStatusBarHidden(window, decorView, true);
+                        if (ShortsPlayerState.isOpen()) {
+                            applyShortsUi(window, decorView);
                         }
                     };
                     decorView.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
@@ -213,10 +246,20 @@ public final class HideShortsToolbarPatch {
                     layoutListener = null;
                 }
 
-                setStatusBarHidden(window, decorView, false);
+                if (HIDE_SHORTS_STATUS_BAR) {
+                    setStatusBarHidden(window, decorView, false);
+                }
+
+                if (toolbarHidden) {
+                    toolbarHidden = false;
+                    View toolbar = findAppToolbar(decorView);
+                    if (toolbar != null) {
+                        toolbar.setVisibility(View.VISIBLE);
+                    }
+                }
             }
         } catch (Exception ex) {
-            Logger.printException(() -> "updateStatusBar failure", ex);
+            Logger.printException(() -> "updateShortsUi failure", ex);
         }
     }
 
